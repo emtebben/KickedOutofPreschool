@@ -1,0 +1,155 @@
+---
+title: "NSECE Analyses for ESQREM 8725"
+output: html_notebook
+---
+
+This notebook contains the code used to complete my final project for ESQREM 8725--Quantitative methods capstone course
+
+First, I need to set my working directory
+
+```{r}
+setwd("C:/Users/tebben.18/OneDrive - The Ohio State University/ESQREM 8725 Capstone/NSECE data")
+```
+
+Then, I need to install relevant packages.
+```{r}
+install.packages(nanier)
+install.packages(tidyr)
+install.packages(survey)
+install.packages(srvyr)
+```
+
+Now I need to load the packages I'll need for the data management and analyses
+```{r}
+library(haven)
+library(naniar)
+library(survey)
+library(dplyr)
+library(srvyr)
+library(tidyverse)
+```
+
+Next, I need to get my data imported into R so I can actually do something with it.
+
+```{r}
+data1<-read_sav("2012_CB.sav")
+data2<-read_sav("2019_CB.sav")
+```
+
+Now I have data read into R, and based on what's showing in my data frame below, it's looking like it imported correctly, but I can check
+
+```{r}
+colnames(data1)
+colnames(data2)
+head(data1)
+head(data2)
+```
+Ok.  Everything looks like it should so far, so now I am going to look specifically at the expulsion variable.  First, I'm going to make sure they loaded as the right data type, but I want to make their names easier to work with, too.  I also need to make sure they have the correct factor structure and are labeled as 1s and 0s instead of 1s and 2s
+
+```{r}
+
+data1 <- data1 %>% rename(expel_2012 = CB_D8_WHYSTOP)
+expel_2012 <- as_factor(data1$expel_2012, levels = "values")
+data1 ['exp_2012'] <- recode (expel_2012, '2' = '0')
+exp12<-data1$exp_2012
+
+
+
+data2 <- data2 %>% rename(expel_2019 = CB9_ENRL_DENY_BEHAVIOR)
+expel_2019<-as_factor(data2$expel_2019, levels = "values")
+data2 ['exp_2019'] <- recode (expel_2019, '2' = '0')
+exp19<-data2$exp_2019
+
+
+```
+
+Now, I can explore for missing-ness and any other issues that might make analyses challenging.
+
+First, I'm going to pull simple frequencies of responses (with a double-check to make sure my recoding worked as expected...).
+```{r}
+table(expel_2012)
+table(exp12)
+
+table(expel_2019)
+table(exp19)
+
+
+```
+
+```
+Just to make sure I'm understanding the data correctly and know roughly what's going on with this variable in particular, I'm going to look specifically to see how many cases are missing.
+
+```{r}
+sum(is.na(expel_2012))
+sum(is.na(expel_2019))
+
+```
+
+
+Okay.  Now it's time to work to understand the proportion of each sample that reports having expelled a child in the previous 3 months.  I'm going to use the R package "survey" as it is designed to work with complex sampling.  There are lots of steps involved in "survey" that I need to do.  The first thing to do, though, is to create a survey design object that represents the strata, primary sampling units, and weights for each survey.
+
+In order to do that, I need to make sure I don't have any missing data in the survey design variables.
+```{r}
+sum(is.na(data1$CB_METH_VSTRATUM))
+sum(is.na(data1$CB_METH_WEIGHT))
+sum(is.na(data1$CB_METH_VPSU))
+
+sum(is.na(data2$CB9_METH_VSTRATUMPU))
+sum(is.na(data2$CB9_METH_WEIGHT))
+sum(is.na(data2$CB9_METH_VPSUPU))
+```
+
+Looks good, so now I have to create the actual survey design objects for each dataset. For this, I'm using the "survey" package.  Each survey design needs. For the NSECE, which is a stratified survey design, I need to specify the primary sampling unit ID, the strata, and the survey weights
+```{r}
+
+sd1 <- svydesign(ids = ~data1$CB_METH_VPSU, 
+                   weights = ~CB_METH_WEIGHT,
+                   strata = ~CB_METH_VSTRATUM,
+                   variables = c(data1),
+                   data = data1)
+                
+
+sd2<-svydesign(ids = ~data2$CB9_METH_VPSUPU, 
+                   weights = ~CB9_METH_WEIGHT,
+                   strata = ~CB9_METH_VSTRATUMPU, 
+                   variables = c(data2),
+                   data = data2)
+                   
+
+```
+
+I'm going to calculate the unweighted proportion of the programs that have expelled children due to behaviors in the past 3 months
+```{r}
+
+exp2012_samp <- data1 %>% 
+  group_by(expel_2012) %>% 
+  drop_na(expel_2012) %>% 
+  tally() %>% 
+  mutate(proportion = n / sum(n), 
+         n_total = sum(n))
+         
+exp2012_samp
+         
+exp2019_samp <- data2 %>% 
+  group_by(expel_2019) %>% 
+  drop_na(expel_2019) %>% 
+  tally() %>% 
+  mutate(proportion = n / sum(n), 
+         n_total = sum(n))
+         
+exp2019_samp
+
+```
+
+Looking at the data, it looks like 10.9% of programs (unweighted) reported expelling a child in the past 3 months in 2012, while 14.6% did in 2019.  That's a good start, but now I need to get the weighted proportions, which I can do using the proportions and confidence intervals function of the survey package.  To compute it, I need to tell the program what variable to look at, and what survey design to use (sd1 (2012) and sd2 (2019) that I created several steps ago).
+```{r}
+prop_2012<-svyciprop(~exp_2012, sd1, na.rm = T)
+
+prop_2019<-svyciprop(~exp_2019, sd2, na.rm=T)
+
+prop_2012
+prop_2019
+
+```
+
+Alright!! We have numbers.  In 2012, the weighted proportion of programs reporting expelling a child in the previous 3 months was .094 (.08-.108).  In 2019, this number was .122 (.11-.137).  Great!  Now I need to compare to see if those proportions are statistically significantly different from one another.  Unfortunately, that's not a straightforward comparison to make. In order to make that comparison, we need to do calculations involving the sample sizes, means, and variances of each group.  Since I don't know how to do this in r (yet) and the "survey" package doesn't include this information, I'm doing it by hand using Welch's unequal variances t-test, with a Welch-Satterthwaite calculation to identify the degrees of freedom.  The results indicate that the two proportions are statistically signficantly different from one another, with more expulsions reported in 2019 than 2012.  t (14381) = 290.45, p < .0001, with a large effect size (4.76)
